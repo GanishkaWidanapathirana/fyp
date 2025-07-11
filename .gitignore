@@ -1,0 +1,30 @@
+# Ignore Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore virtual environment folder named 'afb1'
+afb1/
+
+# Ignore typical virtualenvs (if name differs)
+env/
+venv/
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore log files
+*.log
+
+# Ignore compiled C extensions
+*.so
+
+# Ignore distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
