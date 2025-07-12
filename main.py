@@ -115,6 +115,7 @@ def estimate_afb1_severity(image_tensor, threshold_low=0.2, threshold_high=0.5):
     mold_pixels = np.sum(combined_mask > 0)
     total_pixels = combined_mask.size
     mold_ratio = mold_pixels / total_pixels
+    mold_percentage = round(mold_ratio * 100, 2)
 
     if mold_ratio >= threshold_high:
         severity = "High"
@@ -136,7 +137,7 @@ def estimate_afb1_severity(image_tensor, threshold_low=0.2, threshold_high=0.5):
     pil_img.save(buffered, format="PNG")
     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    return severity, img_base64
+    return severity, img_base64 ,mold_percentage
 
 # === API Endpoint ===
 @app.post("/predict/")
@@ -171,11 +172,12 @@ async def predict(file: UploadFile = File(...)):
         os.remove(temp_path)
 
         if prediction == "afb1":
-            severity, marked_image_base64 = estimate_afb1_severity(transformed_tensor.squeeze(0))
+            severity, marked_image_base64,mold_pecentage = estimate_afb1_severity(transformed_tensor.squeeze(0))
             return {
                 "prediction": prediction,
                 "confidence": round(prob, 4),
                 "affected": True,
+                "mold_pecentage":mold_pecentage,
                 "severity": severity,
                 "marked_image_base64": marked_image_base64  # PNG image encoded as base64
             }

@@ -91,15 +91,6 @@ uvicorn main:app --reload
 
 You will receive a response like:
 
-```json
-{
-  "prediction": "afb1",
-  "confidence": 0.9214,
-  "affected": true,
-  "severity": "Moderate"
-}
-```
-
 ---
 
 ## 📤 Sample API Responses
@@ -121,7 +112,42 @@ You will receive a response like:
   "prediction": "afb1",
   "confidence": 0.9221,
   "affected": true,
-  "severity": "High"
+  "mold_pecentage": 37.42,
+  "severity": "High",
+  "marked_image_base64": "iVBORw0KGgoAAAANSUhEUgAABVYAAAK0CAYAAAC9..."  // shortened for clarity
 }
 ```
 
+## AFB1 Severity Estimation Logic
+This system includes a function called estimate_afb1_severity that analyzes an input image to determine the severity of mold contamination based on color segmentation in the HSV color space. The result helps identify the likelihood of Aflatoxin B1 (AFB1) contamination in corn samples.
+
+### 🎯 How It Works
+Input: The function accepts a preprocessed image tensor (from a corn crop), typically generated from a YOLOv8 segmentation output.
+
+#### Color Filtering in HSV:
+
+    The image is converted from RGB to HSV color space.
+
+    Two masks are created to detect potential mold areas:
+
+    Mask for mold-like colors: Yellow-greenish tones (H: 30–90, S: 40–255, V: 40–255).
+
+    Mask for black mold: Dark/black areas (H: 0–180, S: 0–80, V: 0–80).
+
+#### Combined Mold Mask:
+
+    Both masks are combined to form one binary mask highlighting mold-affected pixels.
+
+    Mold Coverage Calculation:
+
+    The ratio of mold-affected pixels to total pixels is calculated.
+
+    This ratio is converted to a percentage (mold_percentage).
+
+### 📈 Severity Classification
+Based on the mold percentage, the severity of the contamination is classified into three levels:
+
+    Mold Ratio (%)	Severity Level
+    < 20%	Low
+    20% ≤ ratio < 50%	Moderate
+    ≥ 50%	High
