@@ -65,91 +65,80 @@ val_transform = A.Compose([
     ToTensorV2(),
 ])
 
-# === Cropping function (your training logic) ===
-def crop_with_mask_exact(image_bgr: np.ndarray, masks) -> np.ndarray:
-    img_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-
-    mask = masks[0].cpu().numpy()
-    mask = (mask * 255).astype(np.uint8)
-    mask = cv2.resize(mask, (img_rgb.shape[1], img_rgb.shape[0]), interpolation=cv2.INTER_NEAREST)
-
-    masked_img = cv2.bitwise_and(img_rgb, img_rgb, mask=mask)
-    x, y, w, h = cv2.boundingRect(mask)
-    crop = masked_img[y:y+h, x:x+w]
-    return crop
-
-# # === AFB1 severity estimation ===
-# def estimate_afb1_severity(image_tensor, threshold_low=0.2, threshold_high=0.5):
-#     image_np = image_tensor.permute(1, 2, 0).cpu().numpy()
-#     image_np = (image_np * 255).astype(np.uint8)
-#     hsv = cv2.cvtColor(image_np, cv2.COLOR_RGB2HSV)
-
-#     # Aspergillus-like yellow/olive-green mold
-#     lower_mold_color = np.array([30, 40, 40])
-#     upper_mold_color = np.array([90, 255, 255])
-#     mask_color = cv2.inRange(hsv, lower_mold_color, upper_mold_color)
-
-#     # Black mold detection
-#     lower_black = np.array([0, 0, 0])
-#     upper_black = np.array([180, 80, 80])
-#     mask_black = cv2.inRange(hsv, lower_black, upper_black)
-
-#     combined_mask = cv2.bitwise_or(mask_color, mask_black)
-
-#     mold_pixels = np.sum(combined_mask > 0)
-#     total_pixels = combined_mask.size
-#     mold_ratio = mold_pixels / total_pixels
-
-#     if mold_ratio >= threshold_high:
-#         return "High"
-#     elif mold_ratio >= threshold_low:
-#         return "Moderate"
-#     else:
-#         return "Low"
-
-def estimate_afb1_severity(image_tensor, threshold_low=0.2, threshold_high=0.5):
-    image_np = image_tensor.permute(1, 2, 0).cpu().numpy()
-    image_np = (image_np * 255).astype(np.uint8)
+def estimate_afb1_severity(crop_tensor: torch.Tensor, seg_mask: np.ndarray = None, show_mask=False):
+    image_np = (crop_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
     hsv = cv2.cvtColor(image_np, cv2.COLOR_RGB2HSV)
 
-    lower_mold_color = np.array([30, 40, 40])
-    upper_mold_color = np.array([90, 255, 255])
-    mask_color = cv2.inRange(hsv, lower_mold_color, upper_mold_color)
-
+    lower_green = np.array([25, 20, 10])
+    upper_green = np.array([95, 255, 180])
     lower_black = np.array([0, 0, 0])
     upper_black = np.array([180, 80, 80])
+    lower_brown = np.array([5, 30, 10])
+    upper_brown = np.array([30, 255, 180])
+
+    mask_green = cv2.inRange(hsv, lower_green, upper_green)
     mask_black = cv2.inRange(hsv, lower_black, upper_black)
+    mask_brown = cv2.inRange(hsv, lower_brown, upper_brown)
 
-    combined_mask = cv2.bitwise_or(mask_color, mask_black)
+    combined_mask = cv2.bitwise_or(mask_green, mask_black)
+    combined_mask = cv2.bitwise_or(combined_mask, mask_brown)
 
-    mold_pixels = np.sum(combined_mask > 0)
-    total_pixels = combined_mask.size
+    kernel = np.ones((3, 3), np.uint8)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+
+    if seg_mask is not None:
+        seg_mask = cv2.resize(seg_mask.astype(np.uint8), (image_np.shape[1], image_np.shape[0]), interpolation=cv2.INTER_NEAREST)
+        valid_mask = seg_mask > 0
+    else:
+        valid_mask = np.ones_like(combined_mask, dtype=bool)
+
+    mold_pixels = np.sum((combined_mask > 0) & valid_mask)
+    total_pixels = np.sum(valid_mask)
+
+    if total_pixels == 0:
+        return "Error: Empty corn area", None, 0.0
+
     mold_ratio = mold_pixels / total_pixels
     mold_percentage = round(mold_ratio * 100, 2)
 
-    if mold_ratio >= threshold_high:
+    if mold_ratio >= 0.5:
         severity = "High"
-    elif mold_ratio >= threshold_low:
+    elif mold_ratio >= 0.2:
         severity = "Moderate"
     else:
         severity = "Low"
 
-    # Draw contours on the image
+    # Visualization (optional base64 output)
     contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     marked_img = image_np.copy()
     cv2.drawContours(marked_img, contours, -1, (255, 0, 0), 2)
     cv2.putText(marked_img, f"Severity: {severity}", (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-    # Convert to base64
     pil_img = Image.fromarray(marked_img)
     buffered = BytesIO()
     pil_img.save(buffered, format="PNG")
     img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    return severity, img_base64 ,mold_percentage
+    return severity, img_base64, mold_percentage
 
-# === API Endpoint ===
+# === Update crop function to return both crop image and crop mask ===
+def crop_with_mask_exact(image_bgr: np.ndarray, masks) -> tuple[np.ndarray, np.ndarray]:
+    mask = masks[0].cpu().numpy()
+    mask = (mask * 255).astype(np.uint8)
+    mask = cv2.resize(mask, (image_bgr.shape[1], image_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+    masked_img = cv2.bitwise_and(image_bgr, image_bgr, mask=mask)
+    x, y, w, h = cv2.boundingRect(mask)
+    crop = masked_img[y:y+h, x:x+w]
+    crop_mask = mask[y:y+h, x:x+w]
+
+    crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+    crop_mask = (crop_mask > 0).astype(np.uint8)
+    return crop_rgb, crop_mask
+
+# === Update predict endpoint logic ===
 @app.post("/predict/")
 async def predict(file: UploadFile = File(...)):
     temp_path = f"temp_{file.filename}"
@@ -168,8 +157,8 @@ async def predict(file: UploadFile = File(...)):
             os.remove(temp_path)
             return JSONResponse(content={"error": "No corn ear detected."}, status_code=400)
 
-        # Crop corn ear
-        crop_rgb = crop_with_mask_exact(image_bgr, r.masks.data)
+        # Crop both image and mask
+        crop_rgb, crop_mask = crop_with_mask_exact(image_bgr, r.masks.data)
 
         # Preprocess and classify
         transformed_tensor = val_transform(image=crop_rgb)["image"].unsqueeze(0).to(device)
@@ -182,14 +171,18 @@ async def predict(file: UploadFile = File(...)):
         os.remove(temp_path)
 
         if prediction == "afb1":
-            severity, marked_image_base64,mold_pecentage = estimate_afb1_severity(transformed_tensor.squeeze(0))
+            # Pass original size crop tensor and mask to severity estimation
+            crop_tensor = torch.tensor(crop_rgb / 255.0, dtype=torch.float32).permute(2, 0, 1).contiguous()
+            severity, marked_image_base64, mold_percentage = estimate_afb1_severity(
+                crop_tensor, seg_mask=crop_mask
+            )
             return {
                 "prediction": prediction,
                 "confidence": round(prob, 4),
                 "affected": True,
-                "mold_pecentage":mold_pecentage,
+                "mold_percentage": mold_percentage,
                 "severity": severity,
-                "marked_image_base64": marked_image_base64  # PNG image encoded as base64
+                "marked_image_base64": marked_image_base64
             }
         else:
             return {
@@ -200,3 +193,4 @@ async def predict(file: UploadFile = File(...)):
 
     os.remove(temp_path)
     return JSONResponse(content={"error": "Unexpected error."}, status_code=500)
+
